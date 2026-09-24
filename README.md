@@ -11,16 +11,23 @@ source /opt/ros/humble/setup.bash
 cd ~/g03_prii3_ws
 colcon build --symlink-install
 source install/setup.bash
-
-Ejecutar
+```
+## Ejecutar
+```bash
 ros2 launch g03_prii3_turtlesim turtlesim_g03.launch.py
-
-Servicios
-Pausar:
+```
+## Servicios
+### Pausar:
+```bash
 ros2 service call /g03/pause std_srvs/srv/Trigger "{}"
+```
 
-Reanudar:
+### Reanudar:
+```bash
 ros2 service call /g03/resume std_srvs/srv/Trigger "{}"
+```
 
-Reiniciar:
+### Reiniciar:
+```bash
 ros2 service call /g03/restart std_srvs/srv/Trigger "{}"
+```
