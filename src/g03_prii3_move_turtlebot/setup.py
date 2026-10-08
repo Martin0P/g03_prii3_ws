@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'draw_number = g03_prii3_move_turtlebot.draw_number:main',
         ],
     },
 )
