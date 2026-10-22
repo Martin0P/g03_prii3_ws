@@ -1,197 +1,134 @@
+import math
 import rclpy
+
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_srvs.srv   import Trigger
 
 class DrawNumber(Node):
-
     def __init__(self):
         super().__init__('draw_number')
 
-        self.publisher = self.create_publisher(
-            Twist,
-            '/cmd_vel',
-            10
-        )
+        self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
 
+        self.create_service(Trigger, '/g03/pause', self.pause_callback)
+        self.create_service(Trigger, '/g03/resume', self.resume_callback)
+        self.create_service(Trigger, '/g03/restart', self.restart_callback)
+
+        # Valores moderados para TurtleBot3 en Gazebo.
+        # Radio de cada arco: v / omega = 0.30 m.
+        self.linear_speed = 0.15   # m/s
+        self.angular_speed = 0.50  # rad/s
+        self.turn_speed = 0.70     # rad/s
+
+        # (velocidad lineal, velocidad angular, duracion)
         self.movements = [
-            (0.20, -0.80, 2.0),
-            (0.20, -0.80, 2.0),
-            (-0.20, -0.80, 2.0),
-            (-0.20, -0.80, 2.0)
+            (self.linear_speed, -self.angular_speed,
+             math.pi / self.angular_speed),       # arco superior (180 grados)
+            (0.0, self.turn_speed,
+             math.pi / self.turn_speed),          # girar 180 grados en el centro
+            (self.linear_speed, -self.angular_speed,
+             math.pi / self.angular_speed),       # arco inferior (180 grados)
         ]
 
-        # Estado programa
         self.current_movement = 0
         self.elapsed_time = 0.0
-
-        self.paused = True
+        self.paused = True       # Esperar a /g03/resume antes de moverse
         self.finished = False
+        self.last_time = self.get_clock().now()
 
-        # Temporizadores
-        self.timer_period = 0.1
-
-        self.timer = self.create_timer(
-            self.timer_period,
-            self.control_loop
-        )
-
-        # Servicios 
-        self.create_service(
-            Trigger,
-            '/g03/pause',
-            self.pause_callback
-        )
-
-        self.create_service(
-            Trigger,
-            '/g03/resume',
-            self.resume_callback
-        )
-
-        self.create_service(
-            Trigger,
-            '/g03/restart',
-            self.restart_callback
-        )
+        self.timer = self.create_timer(0.05, self.control_loop)  # 20 Hz
 
         self.get_logger().info(
-            'Nodo draw_number del Grupo 03'
+            'Nodo draw_number preparado. Usa /g03/resume para empezar.'
         )
 
-        self.get_logger().info(
-            'Esperando orden /g03/resume'
-        )
-
-    def control_loop(self):
-
-        if self.paused:
-            return
-
-        if self.finished:
-            return
-     
-        # Si hemos terminado todos los movimientos
-        if self.current_movement >= len(self.movements):
-
-            self.stop_robot()
-
-            self.finished = True
-
-            self.get_logger().info(
-                'Dibujo del número 3 terminado'
-            )
-
-            return
-
-        linear_x, angular_z, duration = self.movements[
-            self.current_movement
-        ]
-
-        # Crear mensaje Twist
+    def send_velocity(self, linear=0.0, angular=0.0):
         msg = Twist()
-
-        msg.linear.x = linear_x
-        msg.angular.z = angular_z
-
-        # Publicar velocidad
+        msg.linear.x = float(linear)
+        msg.angular.z = float(angular)
         self.publisher.publish(msg)
 
-        # Actualizar tiempo
-        self.elapsed_time += self.timer_period
+    def stop_robot(self):
+        self.send_velocity()
 
+    def control_loop(self):
+        now = self.get_clock().now()
+        dt = (now - self.last_time).nanoseconds / 1e9
+        self.last_time = now
+
+        # Ignorar saltos de tiempo grandes (p. ej., arranque de Gazebo).
+        dt = max(0.0, min(dt, 0.2))
+
+        if self.paused or self.finished:
+            self.stop_robot()
+            return
+
+        linear, angular, duration = self.movements[self.current_movement]
 
         if self.elapsed_time >= duration:
+            self.stop_robot()
             self.current_movement += 1
             self.elapsed_time = 0.0
 
-            self.get_logger().info(
-                f'Movimiento '
-                f'{self.current_movement}/'
-                f'{len(self.movements)}'
-            )
-
-
-    def stop_robot(self): # Parar el robot
-        if not rclpy.ok():
+            if self.current_movement >= len(self.movements):
+                self.finished = True
+                self.get_logger().info('Dibujo del numero 3 terminado')
+            else:
+                self.get_logger().info(
+                    f'Iniciando movimiento {self.current_movement + 1}/'
+                    f'{len(self.movements)}'
+                )
             return
 
-        msg = Twist()
+        self.send_velocity(linear, angular)
+        self.elapsed_time += dt
 
-        msg.linear.x = 0.0
-        msg.angular.z = 0.0
-
-        self.publisher.publish(msg)
-
-    def pause_callback(self, request, response): # Servicio de parada
+    def pause_callback(self, request, response):
         self.paused = True
         self.stop_robot()
-
         response.success = True
-        response.message = 'Dibujo Detenido'
-
-        self.get_logger().info('Dibujo pausado')
-
+        response.message = 'Dibujo pausado'
         return response
 
     def resume_callback(self, request, response):
-
         if self.finished:
-
             response.success = False
-            response.message = (
-                'El dibujo ya ha terminado. '
-                'Utiliza /g03/restart para comenzar de nuevo.'
-            )
-
+            response.message = 'Dibujo terminado. Usa /g03/restart.'
             return response
 
         self.paused = False
-
+        self.last_time = self.get_clock().now()
         response.success = True
         response.message = 'Dibujo reanudado'
-
-        self.get_logger().info('Dibujo reanudado')
-
         return response
 
     def restart_callback(self, request, response):
-
         self.stop_robot()
-
         self.current_movement = 0
         self.elapsed_time = 0.0
         self.finished = False
-
         self.paused = True
-
+        self.last_time = self.get_clock().now()
         response.success = True
-        response.message = 'Dibujo reiniciado'
-
-        self.get_logger().info('Dibujo reiniciado')
-
+        response.message = 'Secuencia reiniciada. Usa /g03/resume.'
         return response
 
-    def destroy_node(self):
-        if rclpy.ok():
-            self.stop_robot()
-
-        super().destroy_node()
 
 def main(args=None):
     rclpy.init(args=args)
-
     node = DrawNumber()
 
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-
     finally:
-        node.stop_robot()
+        if rclpy.ok():
+            node.stop_robot()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

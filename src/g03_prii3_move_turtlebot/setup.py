@@ -25,6 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'draw_number = g03_prii3_move_turtlebot.draw_number:main',
+            'obstacle_avoidance = g03_prii3_move_turtlebot.obstacle_avoidance:main',
+            'obstacle_esquivar = g03_prii3_move_turtlebot.obstacle_esquivar:main'
         ],
     },
 )
