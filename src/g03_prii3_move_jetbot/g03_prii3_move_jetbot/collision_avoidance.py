@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 
 import math
@@ -11,242 +10,242 @@ from std_srvs.srv import Trigger
 
 
 class CollisionAvoidance(Node):
+   def __init__(self):
+       super().__init__('collision_avoidance')
 
-    def __init__(self):
-        super().__init__('collision_avoidance')
+       # Publicador de velocidad del robot
+       self.publisher = self.create_publisher(
+           Twist, '/cmd_vel', 10
+       )
 
-        # Publicador de velocidad del robot
-        self.publisher = self.create_publisher(
-            Twist, '/cmd_vel', 10
-        )
+       # Suscriptor al LiDAR
+       self.subscription = self.create_subscription(
+           LaserScan, '/scan', self.laser_callback, 10
+       )
 
-        # Suscriptor al LiDAR
-        self.subscription = self.create_subscription(
-            LaserScan, '/scan', self.laser_callback, 10
-        )
+       # Servicios ROS 2
+       self.pause_srv = self.create_service(
+           Trigger, '/g03/pause', self.pause_callback
+       )
 
-        # Servicios ROS
-        self.create_service(
-            Trigger, '/g03/pause', self.pause_callback
-        )
-        self.create_service(
-            Trigger, '/g03/resume', self.resume_callback
-        )
-        self.create_service(
-            Trigger, '/g03/restart', self.restart_callback
-        )
+       self.resume_srv = self.create_service(
+           Trigger, '/g03/resume', self.resume_callback
+       )
 
-        # Configuracion del LiDAR
-        self.safe_distance = 0.80
-        self.front_angle = math.radians(30)
+       self.restart_srv = self.create_service(
+           Trigger, '/g03/restart', self.restart_callback
+       )
 
-        self.obstacle = False
-        self.last_scan_time = None
+       # Configuracion del LiDAR
+       self.safe_distance = 0.50
+       self.front_angle = math.radians(30)
+       self.center_angle = math.pi
 
-        # Velocidades del numero 3
-        self.linear_speed = 0.06
-        self.angular_speed = 0.20
-        self.turn_speed = 0.28
+       self.obstacle = False
+       self.last_scan_time = None
 
-        # Duraciones de movimiento
-        self.arc_time = math.pi / self.angular_speed
-        self.turn_time = math.pi / self.turn_speed
+       # Velocidades del numero 3
+       self.linear_speed = 0.06
+       self.angular_speed = 0.20
+       self.turn_speed = 0.28
 
-        # Secuencia del dibujo
-        # (velocidad lineal, velocidad angular, duracion)
-        self.steps = [
-            (self.linear_speed, -self.angular_speed,
-             self.arc_time),
+       # Duraciones de movimiento
+       self.arc_time = math.pi / self.angular_speed
+       self.turn_time = math.pi / self.turn_speed
 
-            (0.0, self.turn_speed,
-             self.turn_time),
+       # Secuencia del dibujo
+       # (velocidad lineal, velocidad angular, duracion)
+       self.steps = [
+           (self.linear_speed, -self.angular_speed,
+            self.arc_time),
 
-            (self.linear_speed, -self.angular_speed,
-             self.arc_time)
-        ]
+           (0.0, self.turn_speed,
+            self.turn_time),
 
-        # Estado del robot
-        self.step = 0
-        self.elapsed = 0.0
-        self.paused = True
-        self.finished = False
+           (self.linear_speed, -self.angular_speed,
+            self.arc_time)
+       ]
 
-        self.last_time = self.get_clock().now()
+       # Estado del robot
+       self.step = 0
+       self.elapsed = 0.0
+       self.finished = False
+       self.paused = False  # Inicio automatico
 
-        # Temporizador a 20 Hz
-        self.timer = self.create_timer(
-            0.05, self.control_callback
-        )
+       self.last_time = self.get_clock().now()
 
-        self.get_logger().info(
-            'JetBot Collision Avoidance preparado y en pausa.'
-        )
+       # Temporizador a 20 Hz
+       self.timer = self.create_timer(
+           0.05, self.control_callback
+       )
 
-    # Procesamiento de los datos del LiDAR
-    def laser_callback(self, msg):
+       self.get_logger().info(
+           'JetBot Collision Avoidance iniciado. Esperando datos del LiDAR.'
+       )
 
-        self.last_scan_time = self.get_clock().now()
-        distances = []
+   # Procesamiento de los datos del LiDAR
+   def laser_callback(self, msg):
+       self.last_scan_time = self.get_clock().now()
+       distances = []
 
-        for i, distance in enumerate(msg.ranges):
+       for i, distance in enumerate(msg.ranges):
+           angle = msg.angle_min + i * msg.angle_increment
 
-            angle = msg.angle_min + i * msg.angle_increment
+           # Normalizar el angulo entre -pi y pi
+           angle = math.atan2(
+               math.sin(angle),
+               math.cos(angle)
+           )
 
-            # Normalizar el angulo entre -pi y pi
-            angle = math.atan2(
-                math.sin(angle),
-                math.cos(angle)
-            )
+           angle_error = math.atan2(
+               math.sin(angle - self.center_angle),
+               math.cos(angle - self.center_angle)
+           )
 
-            # Detectar unicamente delante del robot
-            if abs(angle) <= self.front_angle:
+           # Detectar unicamente delante del robot
+           if abs(angle_error) <= self.front_angle:
 
-                if math.isfinite(distance):
-                    if msg.range_min <= distance <= msg.range_max:
-                        distances.append(distance)
+               if math.isfinite(distance):
+                   if msg.range_min <= distance <= msg.range_max:
+                       distances.append(distance)
 
-        # Obstaculo dentro de la distancia de seguridad
-        detected = (
-            len(distances) > 0
-            and min(distances) < self.safe_distance
-        )
+       # Obstaculo dentro de la distancia de seguridad
+       detected = (
+           len(distances) > 0
+           and min(distances) < self.safe_distance
+       )
 
-        if detected != self.obstacle:
+       if detected != self.obstacle:
+           self.obstacle = detected
 
-            self.obstacle = detected
+           if detected:
+               self.get_logger().warn(
+                   'Obstaculo detectado. Robot detenido.'
+               )
+               self.stop()
+           else:
+               self.get_logger().info(
+                   'Camino libre. Reanudando dibujo.'
+               )
 
-            if detected:
-                self.get_logger().warn(
-                    'Obstaculo detectado. Robot detenido.'
-                )
-                self.stop()
-            else:
-                self.get_logger().info(
-                    'Camino libre. Reanudando dibujo.'
-                )
+   # Enviar velocidades
+   def send_velocity(self, linear, angular):
 
-    # Enviar velocidades
-    def send_velocity(self, linear, angular):
+       msg = Twist()
+       msg.linear.x = float(linear)
+       msg.angular.z = float(angular)
 
-        msg = Twist()
-        msg.linear.x = float(linear)
-        msg.angular.z = float(angular)
+       self.publisher.publish(msg)
 
-        self.publisher.publish(msg)
+   # Detener el robot
+   def stop(self):
+       self.send_velocity(0.0, 0.0)
 
-    # Detener el robot
-    def stop(self):
-        self.send_velocity(0.0, 0.0)
+   # Control principal
+   def control_callback(self):
+       now = self.get_clock().now()
 
-    # Control principal
-    def control_callback(self):
+       dt = (now - self.last_time).nanoseconds / 1e9
+       self.last_time = now
 
-        now = self.get_clock().now()
+       dt = max(0.0, min(dt, 0.2))
 
-        dt = (now - self.last_time).nanoseconds / 1e9
-        self.last_time = now
+       # Comprobar que llegan datos recientes del LiDAR
+       scan_ok = (
+           self.last_scan_time is not None
+           and 0 <= (now - self.last_scan_time).nanoseconds / 1e9 < 1.0
+       )
+       # Detener por pausa, obstaculo, fin del dibujo
+       # o perdida de datos del sensor
+       if (self.paused or self.finished
+               or self.obstacle or not scan_ok):
+           self.stop()
+           return
 
-        dt = max(0.0, min(dt, 0.2))
+       linear, angular, duration = self.steps[self.step]
+       # Cambiar al siguiente movimiento
+       if self.elapsed >= duration:
+           self.stop()
+           self.step += 1
+           self.elapsed = 0.0
 
-        # Comprobar que llegan datos recientes del LiDAR
-        scan_ok = (
-            self.last_scan_time is not None
-            and 0 <= (now - self.last_scan_time).nanoseconds / 1e9 < 1.0
-        )
+           if self.step >= len(self.steps):
+               self.finished = True
+               self.get_logger().info(
+                   'Dibujo del numero 3 terminado'
+               )
+           else:
+               self.get_logger().info(
+                   f'Movimiento {self.step + 1}'
+               )
+           return
 
-        # Detener durante una pausa, obstaculo
-        # o perdida de datos del sensor
-        if (self.paused or self.finished
-                or self.obstacle or not scan_ok):
-            self.stop()
-            return
+       # Ejecutar movimiento
+       self.send_velocity(linear, angular)
+       self.elapsed += dt
 
-        linear, angular, duration = self.steps[self.step]
+   # Servicio PAUSE
+   def pause_callback(self, request, response):
+       self.paused = True
+       self.stop()
 
-        # Cambiar al siguiente movimiento
-        if self.elapsed >= duration:
+       response.success = True
+       response.message = 'Dibujo pausado'
 
-            self.stop()
-            self.step += 1
-            self.elapsed = 0.0
+       return response
 
-            if self.step >= len(self.steps):
-                self.finished = True
-                self.get_logger().info(
-                    'Dibujo del numero 3 terminado'
-                )
-            else:
-                self.get_logger().info(
-                    f'Movimiento {self.step + 1}'
-                )
+   # Servicio RESUME
+   def resume_callback(self, request, response):
+       if self.finished:
+           response.success = False
+           response.message = 'Dibujo terminado. Reinicia.'
+           return response
 
-            return
+       self.paused = False
+       self.last_time = self.get_clock().now()
 
-        # Ejecutar movimiento
-        self.send_velocity(linear, angular)
-        self.elapsed += dt
+       response.success = True
+       response.message = 'Dibujo reanudado'
 
-    # Servicio de pausa
-    def pause_callback(self, request, response):
+       return response
 
-        self.paused = True
-        self.stop()
 
-        response.success = True
-        response.message = 'Dibujo pausado'
-        return response
+   # Servicio RESTART
+   def restart_callback(self, request, response):
+       self.stop()
 
-    # Servicio de reanudacion
-    def resume_callback(self, request, response):
+       self.step = 0
+       self.elapsed = 0.0
+       self.finished = False
+       self.paused = False
+       self.last_time = self.get_clock().now()
 
-        if self.finished:
-            response.success = False
-            response.message = 'El dibujo ha terminado'
-            return response
+       response.success = True
+       response.message = 'Dibujo reiniciado'
 
-        self.paused = False
-        self.last_time = self.get_clock().now()
-
-        response.success = True
-        response.message = 'Dibujo reanudado'
-        return response
-
-    # Servicio de reinicio
-    def restart_callback(self, request, response):
-
-        self.stop()
-
-        self.step = 0
-        self.elapsed = 0.0
-        self.paused = True
-        self.finished = False
-        self.last_time = self.get_clock().now()
-
-        response.success = True
-        response.message = 'Secuencia reiniciada'
-        return response
-
+       return response
 
 def main(args=None):
 
-    rclpy.init(args=args)
-    node = CollisionAvoidance()
+   rclpy.init(args=args)
+   node = CollisionAvoidance()
 
-    try:
-        rclpy.spin(node)
+   try:
+       rclpy.spin(node)
 
-    except KeyboardInterrupt:
-        pass
+   except KeyboardInterrupt:
+       pass
 
-    finally:
-        if rclpy.ok():
-            node.stop()
-        node.destroy_node()
+   finally:
+       if rclpy.ok():
+           node.stop()
 
-        if rclpy.ok():
-            rclpy.shutdown()
 
+       node.destroy_node()
+
+
+       if rclpy.ok():
+           rclpy.shutdown()
 
 if __name__ == '__main__':
-    main()
-
+   main()
