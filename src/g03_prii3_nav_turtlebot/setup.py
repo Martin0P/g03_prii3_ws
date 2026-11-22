@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+	  'detect_aruco = g03_prii3_nav_turtlebot.detect_aruco:main',
         ],
     },
 )
